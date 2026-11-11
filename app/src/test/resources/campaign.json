@@ -1,0 +1,20 @@
+{
+  "schema": 2,
+  "meta": { "id": "test", "title": "Operation Test" },
+  "settings": { "agent": "AGENT T", "minutes": 60, "metaWord": "NIGHT" },
+  "chapters": [
+    { "id": "home", "title": "Safehouse", "location": "home", "intro": ["a"], "outro": [] },
+    { "id": "trail", "title": "Trail", "location": "outdoor", "intro": ["b"], "outro": [] }
+  ],
+  "steps": [
+    { "id": "s-a", "chapter": "home", "type": "question", "device": "terminal", "answers": ["1234"], "unlock": { "after": "prev" }, "reward": { "fragment": true } },
+    { "id": "s-b", "chapter": "home", "type": "question", "device": "terminal", "unlock": { "after": "start" }, "reward": { "fragment": true } },
+    { "id": "s-off", "chapter": "home", "type": "question", "device": "terminal", "enabled": false, "reward": { "fragment": true } },
+    { "id": "p-gps", "chapter": "trail", "type": "gps-waypoint", "device": "phone", "title": "Oak", "unlock": { "after": "prev" },
+      "waypoint": { "lat": 55.0, "lng": 12.0, "radius": 25, "label": "Old oak" }, "reward": { "fragment": true } },
+    { "id": "p-q", "chapter": "trail", "type": "field-question", "device": "phone", "answers": ["Æble"], "unlock": { "after": ["p-gps"] },
+      "config": { "question": "What year?", "tolerance": 7.5 }, "reward": { "fragment": false } },
+    { "id": "p-tilt", "chapter": "trail", "type": "tilt-lock", "device": "phone", "unlock": { "after": "start" },
+      "config": { "sequence": ["left", "up", "right"] }, "reward": { "fragment": true } }
+  ]
+}

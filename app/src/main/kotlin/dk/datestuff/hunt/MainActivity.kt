@@ -1,0 +1,19 @@
+package dk.datestuff.hunt
+
+import android.os.Bundle
+import android.view.WindowManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import dk.datestuff.hunt.ui.App
+import dk.datestuff.hunt.ui.HuntTheme
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        HuntRepo.init(this)
+        setContent { HuntTheme { App() } }
+    }
+}

@@ -143,6 +143,100 @@ class LogicTest {
     @Test fun backoffCaps() {
         assertEquals(1000, backoffMs(0)); assertEquals(8000, backoffMs(3)); assertEquals(15000, backoffMs(9))
     }
+    @Test fun sessionParsesChatAndPhotoAi() {
+        val s = AppJson.decodeFromString<Session>("""{"id":"x","state":"running","chat":[
+            {"seq":3,"ts":30,"from":"handler","text":"Copy that.","step":"tree"},
+            {"seq":2,"ts":20,"from":"agent","text":"where?"}],
+          "photos":[{"id":"p1","step":"tree","ts":5,"status":"rejected","by":"ai",
+            "ai":{"match":false,"confidence":0.9,"reason":"No tree visible"},"extra":1}]}""")
+        assertEquals(2, s.chat.size)
+        assertEquals("handler", s.chat[0].from)
+        assertEquals("tree", s.chat[0].step)
+        assertNull(s.chat[1].step)
+        val p = s.photos.single()
+        assertEquals("ai", p.by)
+        assertFalse(p.ai!!.match)
+        assertEquals(0.9, p.ai.confidence, 1e-9)
+        assertEquals("No tree visible", p.ai.reason)
+        assertTrue(AppJson.decodeFromString<Session>("""{"id":"y"}""").chat.isEmpty())
+        assertNull(AppJson.decodeFromString<Session>("""{"photos":[{"id":"p"}]}""").photos[0].ai)
+    }
+
+    @Test fun parsesChatAndHandlerEvents() {
+        val r = AppJson.decodeFromString<PollResult>("""{"seq":9,"events":[
+            {"seq":7,"kind":"chat","msg":{"seq":4,"ts":1,"from":"control","text":"hi"}},
+            {"seq":8,"kind":"handler","state":"thinking"},
+            {"seq":9,"kind":"photo","id":"p","step":"s","status":"approved","by":"ai","ai":{"match":true,"confidence":0.8,"reason":"tree"}}]}""")
+        assertEquals("hi", r.events[0].msg!!.text)
+        assertEquals("control", r.events[0].msg!!.from)
+        assertEquals("thinking", r.events[1].state)
+        assertEquals("ai", r.events[2].by)
+        assertTrue(r.events[2].ai!!.match)
+    }
+
+    @Test fun chatQueueItemRoundTrips() {
+        val item = Pending("id1", "chat", "", answer = "hello", sessionId = "sess", ts = 42)
+        val ser = kotlinx.serialization.builtins.ListSerializer(Pending.serializer())
+        val back = AppJson.decodeFromString(ser, AppJson.encodeToString(ser, listOf(item))).single()
+        assertEquals(item, back)
+        assertEquals("hello", back.answer)
+        assertTrue(back.belongsTo("sess"))
+        assertTrue(pendingSolved(listOf(back), "sess").isEmpty())
+        // old queue files without ts still load
+        assertEquals(0L, AppJson.decodeFromString<Pending>("""{"id":"a","kind":"solve","step":"s"}""").ts)
+    }
+
+    @Test fun mergeChatDedupesBySeqAndOrders() {
+        val a = ChatMsg(2, 20, "handler", "b")
+        val merged = mergeServerChat(listOf(ChatMsg(1, 10, "agent", "a"), a), listOf(a.copy(text = "b2"), ChatMsg(3, 30, "control", "c")))
+        assertEquals(listOf(1L, 2L, 3L), merged.map { it.seq })
+        assertEquals("b2", merged[1].text)
+        assertEquals(2, mergeServerChat(merged, emptyList(), cap = 2).size)
+    }
+
+    @Test fun pendingLocalIsShownUntilServerEchoes() {
+        val local = listOf(LocalChat("l1", 1000, "where is it?", baseSeq = 1))
+        val before = mergeChat(listOf(ChatMsg(1, 500, "handler", "ready")), local)
+        assertEquals(2, before.size)
+        assertTrue(before.last().pending)
+        assertEquals("agent", before.last().from)
+        val after = mergeChat(listOf(ChatMsg(1, 500, "handler", "ready"), ChatMsg(2, 1100, "agent", "where is it?")), local)
+        assertEquals(2, after.size)
+        assertFalse(after.any { it.pending })
+        assertTrue(unmatchedLocal(listOf(ChatMsg(2, 1100, "agent", "where is it?")), local).isEmpty())
+    }
+
+    @Test fun duplicateTextMatchesOnePendingEach() {
+        val local = listOf(LocalChat("a", 1000, "ok"), LocalChat("b", 2000, "ok"))
+        val one = listOf(ChatMsg(1, 1100, "agent", "ok"))
+        assertEquals(listOf("b"), unmatchedLocal(one, local).map { it.id })
+        // handler text equal to pending text must not match
+        assertEquals(2, unmatchedLocal(listOf(ChatMsg(1, 1100, "handler", "ok")), local).size)
+    }
+
+    @Test fun feedInterleavesHintsByTime() {
+        val chat = listOf(ChatLine(1, 10, "agent", "a"), ChatLine(2, 30, "handler", "b"))
+        val inbox = listOf(InboxItem(20, "hint", "h"), InboxItem(25, "message", "b"), InboxItem(26, "message", "legacy"))
+        val feed = buildFeed(chat, inbox)
+        assertEquals(listOf("a", "h", "legacy", "b"), feed.map { it.chat?.text ?: it.note!!.text })
+    }
+
+    @Test fun oldIdenticalServerMessageDoesNotMatchNewSend() {
+        val old = ChatMsg(5, 900, "agent", "ok")
+        val local = listOf(LocalChat("n", 1000, "ok", baseSeq = 5))
+        assertEquals(listOf("n"), unmatchedLocal(listOf(old), local).map { it.id })
+        assertTrue(unmatchedLocal(listOf(old, ChatMsg(6, 1100, "agent", "ok")), local).isEmpty())
+    }
+
+    @Test fun failedLocalIsShownFailedAndNeverMatches() {
+        val local = listOf(LocalChat("f", 1000, "hi", baseSeq = 0, failed = true))
+        val lines = mergeChat(listOf(ChatMsg(1, 1100, "agent", "hi")), local)
+        val f = lines.last()
+        assertTrue(f.failed)
+        assertFalse(f.pending)
+        assertEquals("f", f.localId)
+        assertEquals(2, lines.size)
+    }
 }
 
 class TiltDetectorTest {
@@ -183,4 +277,5 @@ class TiltDetectorTest {
         assertEquals("down", d.feed(0f, -6f))
         d.reset(); assertEquals(0, d.progress)
     }
+
 }

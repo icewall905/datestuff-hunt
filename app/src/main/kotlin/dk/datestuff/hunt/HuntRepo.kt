@@ -28,11 +28,15 @@ data class HuntState(
     val session: Session? = null,
     val localSolved: Set<String> = emptySet(),
     val inbox: List<InboxItem> = emptyList(),
+    val serverChat: List<ChatMsg> = emptyList(),
+    val localChat: List<LocalChat> = emptyList(),
+    val handlerThinking: Boolean = false,
     val online: Boolean = true,
     val pending: Int = 0,
     val receivedAt: Long = 0,        // SystemClock.elapsedRealtime() of the session snapshot
 ) {
     val campaign get() = session?.campaign
+    val chat: List<ChatLine> get() = mergeChat(serverChat, localChat)
     val running get() = session?.state == "running" || session?.state == "paused"
     val solvedIds: Set<String> get() = (session?.solved?.keys ?: emptySet()) + localSolved
     val openIds: List<String>
@@ -62,6 +66,7 @@ sealed interface UiEvent {
     data class Solved(val step: String, val fragment: String?, val by: String?) : UiEvent
     data class Opened(val steps: List<String>) : UiEvent
     data class Inbox(val item: InboxItem) : UiEvent
+    data class Chat(val msg: ChatMsg) : UiEvent
     data class Photo(val step: String, val status: String) : UiEvent
     data class Paused(val paused: Boolean) : UiEvent
     data object Locked : UiEvent
@@ -94,6 +99,13 @@ object HuntRepo {
     private val _location = MutableStateFlow<LatLng?>(null)
     val location: StateFlow<LatLng?> = _location.asStateFlow()
 
+    private val _commsDraft = MutableStateFlow<String?>(null)
+    /** Text to prefill in COMMS; setting it makes the HUD switch to that tab. */
+    val commsDraft: StateFlow<String?> = _commsDraft.asStateFlow()
+    fun openComms(prefill: String = "") { _commsDraft.value = prefill }
+    fun consumeDraft() { _commsDraft.value = null }
+
+    private var thinkToken = 0
     private val notified = mutableMapOf<String, Int>() // step -> 1 approach, 2 arrived
     private val inboxSer = ListSerializer(InboxItem.serializer())
 
@@ -106,7 +118,8 @@ object HuntRepo {
         queue = PendingQueue(File(app.filesDir, "queue.json"), photos)
         val cached = runCatching { AppJson.decodeFromString<Session>(sessionFile.readText()) }.getOrNull()
         val inbox = runCatching { AppJson.decodeFromString(inboxSer, inboxFile.readText()) }.getOrDefault(emptyList())
-        _state.update { it.copy(session = cached, inbox = inbox, localSolved = pendingSolved(queue.snapshot(), cached?.id), pending = queue.size(), receivedAt = SystemClock.elapsedRealtime()) }
+        _state.update { it.copy(session = cached, inbox = inbox, localSolved = pendingSolved(queue.snapshot(), cached?.id),
+            serverChat = mergeServerChat(emptyList(), cached?.chat ?: emptyList()), pending = queue.size(), receivedAt = SystemClock.elapsedRealtime()) }
     }
 
     fun setPair(p: PairInfo?) {
@@ -156,11 +169,24 @@ object HuntRepo {
             val serverSolved = s.solved.keys
             _state.update {
                 it.copy(session = s, localSolved = if (reset) emptySet() else it.localSolved - serverSolved,
+                    serverChat = mergeServerChat(if (reset) emptyList() else it.serverChat, s.chat),
+                    localChat = if (reset) emptyList() else it.localChat,
+                    handlerThinking = if (reset) false else it.handlerThinking,
                     receivedAt = SystemClock.elapsedRealtime())
             }
             mergeMessages(s)
         }
+        val messageTexts = r.events.filter { it.kind == "message" }.mapNotNull { it.text }.toSet()
         for (e in r.events) {
+            if (e.kind == "chat" && e.msg != null) {
+                _state.update { st ->
+                    st.copy(serverChat = mergeServerChat(st.serverChat, listOf(e.msg)),
+                        handlerThinking = if (e.msg.from != "agent") false else st.handlerThinking)
+                }
+                // control/message is mirrored into chat and also arrives as a "message" event (which already bannered)
+                if (fresh && e.msg.from != "agent" && !(e.msg.from == "control" && e.msg.text in messageTexts)) _events.emit(UiEvent.Chat(e.msg))
+            }
+            if (e.kind == "handler") setThinking(e.state == "thinking")
             if (fresh) {
                 when (e.kind) {
                     "solved" -> _events.emit(UiEvent.Solved(e.step ?: "", e.fragment, e.by))
@@ -173,7 +199,24 @@ object HuntRepo {
             if (e.kind == "hint" && e.text != null && e.pushed != false) addInbox("h${e.seq}", InboxItem(e.ts, "hint", e.text, e.step), notify = fresh)
             if (e.kind == "message" && e.text != null && (e.to == "all" || e.to == "phone")) addInbox("m${e.seq}", InboxItem(e.ts, "message", e.text), notify = fresh)
         }
+        pruneLocal()
         lastSeq = maxOf(lastSeq, r.seq)
+    }
+
+    private fun setThinking(on: Boolean) {
+        val token = ++thinkToken
+        _state.update { it.copy(handlerThinking = on) }
+        if (on) scope.launch { delay(180_000); if (token == thinkToken) _state.update { it.copy(handlerThinking = false) } }
+    }
+
+    /** Drop optimistic messages the server has echoed, or stale ones no longer queued. */
+    private fun pruneLocal() {
+        val queued = queue.snapshot().filter { it.kind == "chat" }.map { it.id }.toSet()
+        val now = System.currentTimeMillis()
+        _state.update { st ->
+            val keep = unmatchedLocal(st.serverChat, st.localChat).filter { it.failed || it.id in queued || now - it.ts < 300_000 }
+            if (keep.size == st.localChat.size) st else st.copy(localChat = keep)
+        }
     }
 
     private val seenKeys = mutableSetOf<String>()
@@ -250,6 +293,29 @@ object HuntRepo {
         }
     }
 
+    fun sendChat(text: String) {
+        val t = text.trim()
+        val missionId = _state.value.session?.id
+        if (t.isEmpty() || missionId == null) return
+        val id = UUID.randomUUID().toString()
+        val now = System.currentTimeMillis()
+        queue.add(Pending(id, "chat", "", answer = t, sessionId = missionId, ts = now))
+        _state.update { it.copy(localChat = it.localChat + LocalChat(id, now, t, baseSeq = _state.value.serverChat.maxOfOrNull { it.seq } ?: 0L), pending = queue.size()) }
+        scope.launch { flushQueue() }
+    }
+
+    /** Re-queue a failed chat message. */
+    fun retryChat(id: String) {
+        val l = _state.value.localChat.firstOrNull { it.id == id && it.failed } ?: return
+        val missionId = _state.value.session?.id ?: return
+        val now = System.currentTimeMillis()
+        queue.add(Pending(l.id, "chat", "", answer = l.text, sessionId = missionId, ts = now))
+        _state.update { st ->
+            st.copy(localChat = st.localChat.map { if (it.id == id) it.copy(failed = false, ts = now, baseSeq = st.serverChat.maxOfOrNull { s -> s.seq } ?: 0L) else it }, pending = queue.size())
+        }
+        scope.launch { flushQueue() }
+    }
+
     private val flushLock = Any()
     private fun flushQueue() {
         val a = api ?: return
@@ -267,6 +333,7 @@ object HuntRepo {
                                 if (result.locked) _events.tryEmit(UiEvent.Locked)
                             }
                         }
+                        "chat" -> a.chat(p.answer ?: "")
                         "photo" -> {
                             val f = queue.photoPath(p.photoFile ?: "")
                             if (f.exists()) a.photo(p.step, "image/jpeg", android.util.Base64.encodeToString(f.readBytes(), android.util.Base64.NO_WRAP))
@@ -276,7 +343,11 @@ object HuntRepo {
                 } catch (e: ApiException) {
                     if (p.attempts >= 5 || e.code in 400..499 && e.code != 409 && e.code != 408 && e.code != 429) {
                         queue.remove(p.id)
-                        _state.update { if (p.belongsTo(it.session?.id)) it.copy(localSolved = it.localSolved - p.step) else it }
+                        _state.update {
+                            if (!p.belongsTo(it.session?.id)) it
+                            else if (p.kind == "chat") it.copy(localChat = it.localChat.map { l -> if (l.id == p.id) l.copy(failed = true) else l })
+                            else it.copy(localSolved = it.localSolved - p.step)
+                        }
                     } else queue.bump(p.id)
                 } catch (e: Exception) {
                     queue.bump(p.id); break
@@ -284,6 +355,7 @@ object HuntRepo {
             }
             _state.update { it.copy(pending = queue.size()) }
         }
+        pruneLocal()
     }
 
     // ---- location (called by the foreground service) ----
@@ -306,6 +378,7 @@ object HuntRepo {
 
     fun logout() {
         pollJob?.cancel(); api = null; validatedApi = null
+        thinkToken++
         _state.update { HuntState(inbox = it.inbox) }
     }
 }

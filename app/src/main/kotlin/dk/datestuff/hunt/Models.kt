@@ -22,6 +22,9 @@ val AppJson = Json {
 data class Meta(val id: String = "", val title: String = "")
 
 @Serializable
+data class HandlerSettings(val enabled: Boolean = true, val name: String = "")
+
+@Serializable
 data class Settings(
     val agent: String = "AGENT",
     val minutes: Int = 0,
@@ -29,6 +32,7 @@ data class Settings(
     val metaHint: List<String> = emptyList(),
     val finalMessage: List<String> = emptyList(),
     val endLine: String = "MISSION COMPLETE.",
+    val handler: HandlerSettings = HandlerSettings(),
 )
 
 @Serializable
@@ -85,7 +89,21 @@ data class Campaign(
 data class SolvedInfo(val at: Long = 0, val by: String = "", val skipped: Boolean = false)
 
 @Serializable
-data class PhotoInfo(val id: String = "", val step: String = "", val ts: Long = 0, val status: String = "pending")
+data class PhotoAi(val match: Boolean = false, val confidence: Double = 0.0, val reason: String = "")
+
+@Serializable
+data class PhotoInfo(
+    val id: String = "",
+    val step: String = "",
+    val ts: Long = 0,
+    val status: String = "pending",
+    val ai: PhotoAi? = null,
+    val by: String? = null,   // "ai" | "control"
+)
+
+/** Chat line: from = agent (this phone) | handler (AI) | control (human GM). */
+@Serializable
+data class ChatMsg(val seq: Long = 0, val ts: Long = 0, val from: String = "agent", val text: String = "", val step: String? = null)
 
 @Serializable
 data class Message(val seq: Long = 0, val ts: Long = 0, val to: String = "all", val text: String = "")
@@ -105,6 +123,7 @@ data class Session(
     val fragments: Map<String, String> = emptyMap(),
     val photos: List<PhotoInfo> = emptyList(),
     val messages: List<Message> = emptyList(),
+    val chat: List<ChatMsg> = emptyList(),
     val seq: Long = 0,
     val elapsedMs: Long = 0,
     val remainingMs: Long? = null,
@@ -131,6 +150,9 @@ data class Event(
     val extraMinutes: Double? = null,
     val ok: Boolean? = null,
     val device: String? = null,
+    val msg: ChatMsg? = null,      // kind "chat"
+    val state: String? = null,     // kind "handler": thinking | idle
+    val ai: PhotoAi? = null,       // kind "photo"
 )
 
 @Serializable
@@ -138,6 +160,9 @@ data class PollResult(val seq: Long = 0, val session: Session? = null, val event
 
 @Serializable
 data class AnswerResult(val ok: Boolean = false, val locked: Boolean = false, val solved: List<String> = emptyList(), val open: List<String> = emptyList())
+
+@Serializable
+data class ChatResult(val ok: Boolean = false, val id: JsonElement? = null)
 
 @Serializable
 data class HintResult(val hint: String = "", val index: Int = 0)

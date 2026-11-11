@@ -74,8 +74,14 @@ fun StepHost(id: String, onBack: () -> Unit) {
 
         if (!solved) {
             hint?.let { HudPanel(accent = Amber) { Text(it, color = Amber, style = MaterialTheme.typography.bodyLarge) } }
-            HudButton("Request hint", Modifier.fillMaxWidth(), amber = true) {
-                scope.launch { hint = HuntRepo.requestHint(step.id) ?: "NO HINT AVAILABLE." }
+            Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
+                HudButton("Request hint", Modifier.weight(1f), amber = true) {
+                    scope.launch { hint = HuntRepo.requestHint(step.id) ?: "NO HINT AVAILABLE." }
+                }
+                HudButton("Ask Handler", Modifier.weight(1f)) {
+                    HuntRepo.openComms("Re: ${step.title.ifBlank { step.id }}: ")
+                    onBack()
+                }
             }
         }
     }
@@ -93,6 +99,11 @@ fun Complete(step: Step) {
         if (!frag.isNullOrEmpty()) {
             Text("FRAGMENT ACQUIRED", color = Amber, style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
             Text(frag, color = Amber, style = MaterialTheme.typography.displayLarge)
+        }
+        if (step.type == PhoneStepType.PHOTO || step.type == PhoneStepType.SELFIE) {
+            state.session?.photos?.lastOrNull { it.step == step.id }?.ai?.reason?.takeIf { it.isNotBlank() }?.let {
+                Text(it, color = PhosphorDim, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 8.dp))
+            }
         }
         step.reward?.message?.takeIf { it.isNotBlank() }?.let { Typewriter(it) }
     }

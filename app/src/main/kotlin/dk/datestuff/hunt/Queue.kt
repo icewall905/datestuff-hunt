@@ -7,12 +7,13 @@ import java.io.File
 @Serializable
 data class Pending(
     val id: String,
-    val kind: String,          // answer | solve | photo
+    val kind: String,          // answer | solve | photo | chat (text in `answer`)
     val step: String,
     val answer: String? = null,
     val photoFile: String? = null,
     val attempts: Int = 0,
     val sessionId: String? = null,
+    val ts: Long = 0,
 ) {
     fun belongsTo(activeSessionId: String?): Boolean = sessionId != null && sessionId == activeSessionId
 }

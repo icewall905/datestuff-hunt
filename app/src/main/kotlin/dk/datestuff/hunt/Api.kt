@@ -59,6 +59,9 @@ class Api(baseUrl: String, private val token: String) {
     fun hint(step: String): HintResult =
         AppJson.decodeFromString(post("/api/hint", buildJsonObject { put("step", step) }.toString()))
 
+    fun chat(text: String): ChatResult =
+        AppJson.decodeFromString(post("/api/device/chat", buildJsonObject { put("text", text) }.toString()))
+
     fun location(lat: Double, lng: Double, acc: Float, heading: Float?, ts: Long) {
         val b = buildJsonObject {
             put("lat", lat); put("lng", lng); put("acc", acc.toDouble()); put("ts", ts)

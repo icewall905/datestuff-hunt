@@ -10,7 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.OutlinedTextField
+import dk.datestuff.hunt.ChatLine
+import dk.datestuff.hunt.buildFeed
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
@@ -23,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -41,7 +50,9 @@ import kotlinx.coroutines.launch
 fun HudScreen(onStep: (String) -> Unit, onUnpair: () -> Unit) {
     val state by HuntRepo.state.collectAsStateWithLifecycle()
     val loc by HuntRepo.location.collectAsStateWithLifecycle()
-    var tab by remember { mutableStateOf(0) }
+    var tab by rememberSaveable { mutableStateOf(0) }
+    val draft by HuntRepo.commsDraft.collectAsStateWithLifecycle()
+    LaunchedEffect(draft) { if (draft != null) tab = 1 }
     var now by remember { mutableLongStateOf(android.os.SystemClock.elapsedRealtime()) }
     LaunchedEffect(Unit) { while (true) { delay(500); now = android.os.SystemClock.elapsedRealtime() } }
     var hintDialog by remember { mutableStateOf(false) }
@@ -59,14 +70,14 @@ fun HudScreen(onStep: (String) -> Unit, onUnpair: () -> Unit) {
         Text(state.campaign?.meta?.title ?: "STANDBY", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium)
         // tabs
         Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(6.dp)) {
-            listOf("MISSIONS", "INBOX${if (state.inbox.isNotEmpty()) " ${state.inbox.size}" else ""}", "CODEX", "MAP").forEachIndexed { i, t ->
+            listOf("MISSIONS", "COMMS", "CODEX", "MAP").forEachIndexed { i, t ->
                 if (i == tab) HudSolidButton(t, Modifier.weight(1f)) { tab = i } else HudButton(t, Modifier.weight(1f)) { tab = i }
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 0 -> Missions(state, loc, onStep)
-                1 -> Inbox(state)
+                1 -> Comms(state)
                 2 -> Codex(state)
                 else -> MapTab(state, loc)
             }
@@ -123,18 +134,60 @@ private fun StepCard(st: Step, loc: dk.datestuff.hunt.LatLng?, onClick: () -> Un
     }
 }
 
+fun chatLabel(from: String, state: HuntState): String = when (from) {
+    "handler" -> state.campaign?.settings?.handler?.name?.takeIf { it.isNotBlank() } ?: "HANDLER"
+    "control" -> "CONTROL"
+    else -> "YOU"
+}
+
 @Composable
-private fun Inbox(state: HuntState) {
-    if (state.inbox.isEmpty()) { Text("NO TRANSMISSIONS.", color = PhosphorDim, style = MaterialTheme.typography.bodyLarge); return }
-    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp), reverseLayout = false) {
-        items(state.inbox.reversed()) { m ->
-            HudPanel(accent = if (m.kind == "hint") Amber else Line) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Tag(if (m.kind == "hint") "hint" else "control", if (m.kind == "hint") Amber else Phosphor)
-                    Text(java.text.SimpleDateFormat("HH:mm", java.util.Locale.US).format(java.util.Date(m.ts)), color = PhosphorDim, style = MaterialTheme.typography.bodySmall)
+private fun Comms(state: HuntState) {
+    val feed = remember(state.serverChat, state.localChat, state.inbox) { buildFeed(state.chat, state.inbox) }
+    val listState = rememberLazyListState()
+    var text by rememberSaveable { mutableStateOf("") }
+    val draft by HuntRepo.commsDraft.collectAsStateWithLifecycle()
+    LaunchedEffect(draft) { draft?.let { text = it; HuntRepo.consumeDraft() } }
+    val extra = if (state.handlerThinking) 1 else 0
+    LaunchedEffect(feed.size, extra) { if (feed.size + extra > 0) listState.animateScrollToItem(feed.size + extra - 1) }
+    val fmt = remember { java.text.SimpleDateFormat("HH:mm", java.util.Locale.US) }
+    Column(Modifier.fillMaxSize(), Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (feed.isEmpty() && !state.handlerThinking) item { Text("NO TRANSMISSIONS.", color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
+            items(feed.size) { i ->
+                val e = feed[i]
+                val c = e.chat
+                if (c != null) ChatBubble(c, chatLabel(c.from, state), fmt.format(java.util.Date(c.ts)), onRetry = { c.localId?.let(HuntRepo::retryChat) })
+                else e.note?.let { m ->
+                    HudPanel(accent = Amber) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Tag(if (m.kind == "hint") "hint" else "control", if (m.kind == "hint") Amber else Phosphor)
+                            Text(fmt.format(java.util.Date(m.ts)), color = PhosphorDim, style = MaterialTheme.typography.bodySmall)
+                        }
+                        Text(m.text, color = Phosphor, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
+                    }
                 }
-                Text(m.text, color = Phosphor, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
             }
+            if (state.handlerThinking) item { Text("${chatLabel("handler", state)} is thinking\u2026", color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
+        }
+        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp), Alignment.CenterVertically) {
+            OutlinedTextField(text, { text = it }, Modifier.weight(1f), placeholder = { Text("MESSAGE", color = PhosphorDim) },
+                maxLines = 3, colors = fieldColors())
+            HudSolidButton("Send", enabled = text.isNotBlank() && state.session?.id != null) { HuntRepo.sendChat(text); text = "" }
+        }
+    }
+}
+
+@Composable
+private fun ChatBubble(c: ChatLine, label: String, time: String, onRetry: () -> Unit) {
+    val mine = c.from == "agent"
+    val accent = when { c.failed -> Danger; mine -> Line; c.from == "control" -> Amber; else -> Phosphor }
+    Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
+        Column(Modifier.widthIn(max = 300.dp).background(Panel, RoundedCornerShape(4.dp)).border(1.dp, accent, RoundedCornerShape(4.dp)).let { if (c.failed) it.clickable(onClick = onRetry) else it }.padding(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (!mine) Tag(label, if (c.from == "control") Amber else Phosphor)
+                Text(if (c.failed) "FAILED \u2013 TAP TO RETRY" else if (c.pending) "SENDING\u2026" else time, color = if (c.failed) Danger else PhosphorDim, style = MaterialTheme.typography.bodySmall)
+            }
+            Text(c.text, color = if (c.pending) PhosphorDim else Phosphor, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
         }
     }
 }

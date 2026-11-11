@@ -72,6 +72,7 @@ fun App() {
                 is UiEvent.Solved -> { Feedback.success(ctx); banner = "STEP SOLVED" + (e.fragment?.let { " // FRAGMENT $it" } ?: "") }
                 is UiEvent.Opened -> { Feedback.message(ctx); banner = "NEW ORDERS RECEIVED" }
                 is UiEvent.Inbox -> { Feedback.message(ctx); banner = "MISSION CONTROL: " + e.item.text.take(80) }
+                is UiEvent.Chat -> { Feedback.message(ctx); banner = chatLabel(e.msg.from, HuntRepo.state.value) + ": " + e.msg.text.take(80) }
                 is UiEvent.Photo -> { if (e.status == "approved") Feedback.success(ctx) else if (e.status == "rejected") Feedback.error(ctx); banner = "PHOTO ${e.status.uppercase()}" }
                 is UiEvent.Paused -> banner = if (e.paused) "OPERATION PAUSED" else "OPERATION RESUMED"
                 is UiEvent.Approach -> { if (e.arrived) Feedback.arrive(ctx) else Feedback.approach(ctx); banner = if (e.arrived) "TARGET REACHED" else "TARGET < 50 M" }

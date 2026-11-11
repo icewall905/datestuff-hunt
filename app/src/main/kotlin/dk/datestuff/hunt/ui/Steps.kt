@@ -131,7 +131,9 @@ fun PhotoStep(step: Step, front: Boolean) {
     var phase by remember { mutableStateOf("capture") } // capture | review | waiting
     var jpeg by remember { mutableStateOf<ByteArray?>(null) }
     val capture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
-    val status = state.session?.photos?.lastOrNull { it.step == step.id }?.status
+    val rec = state.session?.photos?.lastOrNull { it.step == step.id }
+    val status = rec?.status
+    val reason = rec?.ai?.reason?.takeIf { it.isNotBlank() }
     Text(step.cfgString("prompt").uppercase(), color = Amber, style = MaterialTheme.typography.titleLarge)
     when (phase) {
         "capture" -> RequirePermission(CAMERA, "CAMERA") {
@@ -154,10 +156,14 @@ fun PhotoStep(step: Step, front: Boolean) {
         }
         else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (status == "rejected") {
-                Text("REJECTED BY MISSION CONTROL. RETAKE.", color = Danger, style = MaterialTheme.typography.titleMedium)
+                Text(if (rec?.by == "ai") "REJECTED BY HANDLER. RETAKE." else "REJECTED BY MISSION CONTROL. RETAKE.", color = Danger, style = MaterialTheme.typography.titleMedium)
+                reason?.let { Text(it, color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
                 HudButton("Retake", Modifier.fillMaxWidth()) { phase = "capture" }
+            } else if (status == "approved") {
+                Text("APPROVED.", color = Phosphor, style = MaterialTheme.typography.titleMedium)
+                reason?.let { Text(it, color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
             } else {
-                Text(if (state.pending > 0) "UPLOADING (QUEUED UNTIL ONLINE)..." else "AWAITING MISSION CONTROL APPROVAL...", color = Amber, style = MaterialTheme.typography.titleMedium)
+                Text(if (state.pending > 0) "UPLOADING (QUEUED UNTIL ONLINE)..." else if (status == "pending") "CONTROL IS REVIEWING\u2026" else "AWAITING MISSION CONTROL APPROVAL...", color = Amber, style = MaterialTheme.typography.titleMedium)
                 PulseBar()
             }
         }

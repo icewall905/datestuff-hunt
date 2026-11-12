@@ -125,14 +125,17 @@ fun QrStep(step: Step) {
 }
 
 @Composable
-fun PhotoStep(step: Step, front: Boolean) {
+fun PhotoStep(step: Step, front: Boolean, onHold: (Boolean) -> Unit = {}) {
     val ctx = LocalContext.current
     val state by HuntRepo.state.collectAsStateWithLifecycle()
-    var phase by remember { mutableStateOf("capture") } // capture | review | waiting
-    var jpeg by remember { mutableStateOf<ByteArray?>(null) }
-    val capture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
     val rec = state.session?.photos?.lastOrNull { it.step == step.id }
     val status = rec?.status
+    var phase by remember { mutableStateOf(if (status == "pending") "waiting" else "capture") } // capture | review | waiting
+    var jpeg by remember { mutableStateOf<ByteArray?>(null) }
+    // id of the newest photo record before this screen's send; null = any record counts
+    var sentAfter by remember { mutableStateOf<String?>(null) }
+    val onDecoded = { onHold(false) }
+    val capture = remember { ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY).build() }
     val reason = rec?.ai?.reason?.takeIf { it.isNotBlank() }
     Text(step.cfgString("prompt").uppercase(), color = Amber, style = MaterialTheme.typography.titleLarge)
     when (phase) {
@@ -151,20 +154,20 @@ fun PhotoStep(step: Step, front: Boolean) {
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 HudButton("Retake", Modifier.weight(1f)) { phase = "capture" }
-                HudSolidButton("Send", Modifier.weight(1f)) { jpeg?.let { HuntRepo.submitPhoto(step.id, it) }; phase = "waiting" }
+                HudSolidButton("Send", Modifier.weight(1f)) { jpeg?.let { sentAfter = rec?.id; onHold(true); HuntRepo.submitPhoto(step.id, it) }; phase = "waiting" }
             }
         }
         else -> Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (status == "rejected") {
+            // Only judge the photo sent from this screen: an older record for the step must not end the decode early.
+            val fresh = rec != null && (sentAfter == null || rec.id != sentAfter)
+            val shown = if (fresh) status else null
+            DecodeView(jpeg, shown, queued = state.pending > 0 && !fresh) { onDecoded() }
+            if (shown == "rejected") {
                 Text(if (rec?.by == "ai") "REJECTED BY HANDLER. RETAKE." else "REJECTED BY MISSION CONTROL. RETAKE.", color = Danger, style = MaterialTheme.typography.titleMedium)
                 reason?.let { Text(it, color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
-                HudButton("Retake", Modifier.fillMaxWidth()) { phase = "capture" }
-            } else if (status == "approved") {
-                Text("APPROVED.", color = Phosphor, style = MaterialTheme.typography.titleMedium)
-                reason?.let { Text(it, color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
-            } else {
-                Text(if (state.pending > 0) "UPLOADING (QUEUED UNTIL ONLINE)..." else if (status == "pending") "CONTROL IS REVIEWING\u2026" else "AWAITING MISSION CONTROL APPROVAL...", color = Amber, style = MaterialTheme.typography.titleMedium)
-                PulseBar()
+                HudButton("Retake", Modifier.fillMaxWidth()) { onDecoded(); phase = "capture" }
+            } else if (shown == "pending") {
+                Text("CONTROL IS VERIFYING THE IMAGE\u2026", color = PhosphorDim, style = MaterialTheme.typography.bodyLarge)
             }
         }
     }

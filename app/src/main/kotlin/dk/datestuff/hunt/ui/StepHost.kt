@@ -52,6 +52,8 @@ fun StepHost(id: String, onBack: () -> Unit) {
     val wp = step.waypoint
     val dist = if (wp != null && loc != null) Geo.distance(loc!!.lat, loc!!.lng, wp.lat, wp.lng) else null
     var arrived by rememberSaveable(id) { mutableStateOf(false) }
+    // photo steps keep their decode animation on screen until its finale, even once solved
+    var decoding by remember(id) { mutableStateOf(false) }
     if (dist != null && wp != null && dist <= wp.radius) arrived = true
     val gated = wp != null && step.type !in SELF_LOCATED && (step.type != PhoneStepType.AR_CHEST || step.cfgBool("requireWaypoint", true))
 
@@ -65,14 +67,14 @@ fun StepHost(id: String, onBack: () -> Unit) {
         }
         if (!fullBleed) Column(Modifier.verticalScroll(rememberScrollState()).weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Lines(step.text)
-            if (solved) Complete(step)
-            else if (gated && !arrived) {
+            if (solved && !decoding) Complete(step)
+            else if (!solved && gated && !arrived) {
                 SectionTitle("Proceed to target")
                 if (wp != null) Radar(wp, loc, orientation, showDistance = step.cfgBool("revealDistance", true), showArrow = step.cfgBool("arrow", true))
-            } else StepBody(step, loc, orientation)
+            } else StepBody(step, loc, orientation) { decoding = it }
         } else Column(Modifier.weight(1f)) { StepBody(step, loc, orientation) }
 
-        if (!solved) {
+        if (!solved && !decoding) {
             hint?.let { HudPanel(accent = Amber) { Text(it, color = Amber, style = MaterialTheme.typography.bodyLarge) } }
             Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp)) {
                 HudButton("Request hint", Modifier.weight(1f), amber = true) {
@@ -110,7 +112,7 @@ fun Complete(step: Step) {
 }
 
 @Composable
-fun StepBody(step: Step, loc: dk.datestuff.hunt.LatLng?, orientation: androidx.compose.runtime.State<dk.datestuff.hunt.Orientation>) {
+fun StepBody(step: Step, loc: dk.datestuff.hunt.LatLng?, orientation: androidx.compose.runtime.State<dk.datestuff.hunt.Orientation>, onHold: (Boolean) -> Unit = {}) {
     when (step.type) {
         PhoneStepType.GPS -> GpsStep(step, loc, orientation, silent = false)
         PhoneStepType.GEOFENCE -> GpsStep(step, loc, orientation, silent = true)
@@ -119,8 +121,8 @@ fun StepBody(step: Step, loc: dk.datestuff.hunt.LatLng?, orientation: androidx.c
         PhoneStepType.AR_CHEST -> ArChestStep(step)
         PhoneStepType.AR_COLLECT -> ArCollectStep(step)
         PhoneStepType.QR -> QrStep(step)
-        PhoneStepType.PHOTO -> PhotoStep(step, front = false)
-        PhoneStepType.SELFIE -> PhotoStep(step, front = true)
+        PhoneStepType.PHOTO -> PhotoStep(step, front = false, onHold = onHold)
+        PhoneStepType.SELFIE -> PhotoStep(step, front = true, onHold = onHold)
         PhoneStepType.QUESTION -> QuestionStep(step)
         PhoneStepType.COMPASS -> CompassStep(step, orientation)
         PhoneStepType.TILT -> TiltStep(step)

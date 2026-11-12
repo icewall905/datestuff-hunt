@@ -12,6 +12,14 @@ private fun fixture(): Campaign =
     AppJson.decodeFromString(LogicTest::class.java.getResource("/campaign.json")!!.readText())
 
 class LogicTest {
+    @Test fun decodeScriptHoldsOnLastStageAndFormatsHex() {
+        val d = dk.datestuff.hunt.ui.DecodeScript
+        assertEquals("UPLINK ESTABLISHED", d.stage(0))
+        assertEquals(d.stages.last(), d.stage(99))
+        assertTrue(d.stages.any { it.startsWith("DECODING HIDDEN IMAGE DATA") })
+        assertTrue(d.hexLine(kotlin.random.Random(1)).matches(Regex("([0-9A-F]{2} ){7}[0-9A-F]{2}")))
+    }
+
     @Test fun offlineProgressSurvivesOnlyItsOwnSession() {
         val entries = listOf(
             Pending("a", "answer", "checkpoint", sessionId = "night-one"),

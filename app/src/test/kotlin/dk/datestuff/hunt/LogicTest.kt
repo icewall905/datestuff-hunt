@@ -12,6 +12,12 @@ private fun fixture(): Campaign =
     AppJson.decodeFromString(LogicTest::class.java.getResource("/campaign.json")!!.readText())
 
 class LogicTest {
+    @Test fun mapIgnoresUnpinnedZeroZero() {
+        assertFalse(dk.datestuff.hunt.ui.pinned(0.0, 0.0))
+        assertFalse(dk.datestuff.hunt.ui.pinned(Double.NaN, 12.5))
+        assertTrue(dk.datestuff.hunt.ui.pinned(55.65, 12.53))
+    }
+
     @Test fun decodeScriptHoldsOnLastStageAndFormatsHex() {
         val d = dk.datestuff.hunt.ui.DecodeScript
         assertEquals("UPLINK ESTABLISHED", d.stage(0))

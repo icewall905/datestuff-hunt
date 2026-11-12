@@ -244,6 +244,8 @@ fun CompassStep(step: Step, orientation: State<Orientation>) {
     }
 }
 
+private val TILT_ARROW = mapOf("left" to "←", "right" to "→", "up" to "↑", "down" to "↓")
+
 @Composable
 fun TiltStep(step: Step) {
     val seq = remember(step.id) { step.cfgStrings("sequence") }
@@ -253,8 +255,12 @@ fun TiltStep(step: Step) {
     var progress by remember { mutableIntStateOf(0) }
     var last by remember { mutableStateOf("") }
     var shakeAt by remember { mutableLongStateOf(0L) }
+    var roll by remember { mutableFloatStateOf(0f) }
+    var pitch by remember { mutableFloatStateOf(0f) }
+    var ready by remember { mutableStateOf(false) }
     rememberAccel { x, y, z ->
-        val g = det.feed(x, z)
+        val g = det.feed(x, y, z)
+        roll = det.roll; pitch = det.pitch; ready = det.calibrated
         if (g != null) {
             last = g
             val before = progress
@@ -271,13 +277,25 @@ fun TiltStep(step: Step) {
     Column(Modifier.fillMaxWidth(), Arrangement.spacedBy(10.dp), Alignment.CenterHorizontally) {
         Text("TILT THE DEVICE TO ENTER THE SEQUENCE", color = Amber, style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            seq.forEachIndexed { i, _ ->
-                Box(Modifier.size(36.dp), Alignment.Center) {
+            seq.forEachIndexed { i, dir ->
+                Box(Modifier.size(44.dp), Alignment.Center) {
                     Canvas(Modifier.fillMaxSize()) { drawRect(if (i < progress) Phosphor else Line, style = if (i < progress) androidx.compose.ui.graphics.drawscope.Fill else Stroke(2.dp.toPx())) }
+                    Text(TILT_ARROW[dir] ?: "?", color = if (i < progress) Bg else Phosphor, style = MaterialTheme.typography.titleLarge)
                 }
             }
         }
+        // spirit level: the dot shows the current tilt; the ring is how far a move must go
+        Canvas(Modifier.size(140.dp)) {
+            val r = size.minDimension / 2; val c = center
+            drawCircle(Line, r, c, style = Stroke(2.dp.toPx()))
+            drawCircle(Phosphor.copy(alpha = 0.35f), r * 12f / 45f, c, style = Stroke(1.dp.toPx()))
+            drawCircle(Amber.copy(alpha = 0.6f), r * 25f / 45f, c, style = Stroke(1.dp.toPx()))
+            val dx = (-roll / 45f).coerceIn(-1f, 1f) * r; val dy = (pitch / 45f).coerceIn(-1f, 1f) * r
+            drawCircle(if (ready) Phosphor else PhosphorDim, 10.dp.toPx(), androidx.compose.ui.geometry.Offset(c.x + dx, c.y + dy))
+        }
         Text(last.uppercase(), color = Phosphor, style = MaterialTheme.typography.displaySmall)
+        Text(if (ready) "Hold the phone as you normally do. Tilt firmly past the outer ring, then back to the centre before the next move."
+             else "Hold still for a moment…", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
         if (shake) Text("SHAKE TO RESET", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium)
     }
 }

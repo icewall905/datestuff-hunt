@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -24,6 +25,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -33,6 +37,7 @@ import dk.datestuff.hunt.LocationService
 import dk.datestuff.hunt.Feedback
 import dk.datestuff.hunt.Store
 import dk.datestuff.hunt.UiEvent
+import dk.datestuff.hunt.buildFeed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -42,6 +47,36 @@ fun App() {
     val state by HuntRepo.state.collectAsStateWithLifecycle()
     var pairLoaded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val voice = remember(ctx, scope) { CommsVoice(ctx, scope) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle, voice, state.session?.id, state.pair) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) voice.close()
+        }
+        lifecycle.addObserver(observer)
+        onDispose {
+            lifecycle.removeObserver(observer)
+            voice.close()
+        }
+    }
+
+    val sessionId = state.session?.id
+    val spokenFeed = remember(state.serverChat, state.inbox) {
+        buildFeed(state.chat.filter { it.from != "agent" }, state.inbox)
+    }
+    val seenTransmissions = remember(sessionId, state.pair) { mutableSetOf<Any>() }
+    var speechBaselineLoaded by remember(sessionId, state.pair) { mutableStateOf(false) }
+    LaunchedEffect(spokenFeed, seenTransmissions, state.online) {
+        if (sessionId == null || state.pair == null || !state.online) return@LaunchedEffect
+        for (entry in spokenFeed) {
+            val key = entry.chat?.seq ?: entry.note ?: continue
+            val incoming = seenTransmissions.add(key)
+            if (incoming && speechBaselineLoaded && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                voice.enqueue(entry.chat?.text ?: entry.note?.text.orEmpty())
+            }
+        }
+        speechBaselineLoaded = true
+    }
 
     LaunchedEffect(Unit) {
         Store.pair(ctx).collect { HuntRepo.setPair(it); pairLoaded = true }
@@ -90,7 +125,7 @@ fun App() {
             state.running && state.session?.id != null && briefed != state.session?.id -> BriefingScreen(state) {
                 scope.launch { Store.setBriefed(ctx, state.session?.id ?: "") }
             }
-            else -> Main(onUnpair = { scope.launch { Store.clearPair(ctx); HuntRepo.logout() } })
+            else -> Main(voice, onUnpair = { scope.launch { Store.clearPair(ctx); HuntRepo.logout() } })
         }
         AnimatedVisibility(banner != null, Modifier.align(Alignment.TopCenter)) {
             Text(banner ?: "", color = Bg, style = MaterialTheme.typography.titleMedium,
@@ -100,10 +135,10 @@ fun App() {
 }
 
 @Composable
-private fun Main(onUnpair: () -> Unit) {
+private fun Main(voice: CommsVoice, onUnpair: () -> Unit) {
     val nav = rememberNavController()
     NavHost(nav, startDestination = "hud") {
-        composable("hud") { HudScreen(onStep = { nav.navigate("step/$it") }, onUnpair = onUnpair) }
+        composable("hud") { HudScreen(voice, onStep = { nav.navigate("step/$it") }, onUnpair = onUnpair) }
         composable("step/{id}") { b -> StepHost(b.arguments?.getString("id") ?: "", onBack = { nav.popBackStack() }) }
     }
 }

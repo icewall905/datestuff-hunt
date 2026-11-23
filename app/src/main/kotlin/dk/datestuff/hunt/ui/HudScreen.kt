@@ -1,6 +1,10 @@
 package dk.datestuff.hunt.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,6 +30,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -37,6 +42,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dk.datestuff.hunt.Geo
 import dk.datestuff.hunt.Game
@@ -47,7 +54,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 @Composable
-fun HudScreen(onStep: (String) -> Unit, onUnpair: () -> Unit) {
+internal fun HudScreen(voice: CommsVoice, onStep: (String) -> Unit, onUnpair: () -> Unit) {
     val state by HuntRepo.state.collectAsStateWithLifecycle()
     val loc by HuntRepo.location.collectAsStateWithLifecycle()
     var tab by rememberSaveable { mutableStateOf(0) }
@@ -77,7 +84,7 @@ fun HudScreen(onStep: (String) -> Unit, onUnpair: () -> Unit) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
             when (tab) {
                 0 -> Missions(state, loc, onStep)
-                1 -> Comms(state)
+                1 -> Comms(state, voice)
                 2 -> Codex(state)
                 else -> MapTab(state, loc)
             }
@@ -141,10 +148,19 @@ fun chatLabel(from: String, state: HuntState): String = when (from) {
 }
 
 @Composable
-private fun Comms(state: HuntState) {
+private fun Comms(state: HuntState, voice: CommsVoice) {
     val feed = remember(state.serverChat, state.localChat, state.inbox) { buildFeed(state.chat, state.inbox) }
     val listState = rememberLazyListState()
     var text by rememberSaveable { mutableStateOf("") }
+    val context = LocalContext.current
+    DisposableEffect(voice) { onDispose { voice.cancelDictation() } }
+    val addTranscript: (String) -> Unit = { transcript ->
+        text = listOf(text.trimEnd(), transcript).filter { it.isNotEmpty() }.joinToString(" ")
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) voice.startRecording(addTranscript)
+        else voice.status = "Microphone permission denied. You can still type."
+    }
     val draft by HuntRepo.commsDraft.collectAsStateWithLifecycle()
     LaunchedEffect(draft) { draft?.let { text = it; HuntRepo.consumeDraft() } }
     val extra = if (state.handlerThinking) 1 else 0
@@ -156,7 +172,12 @@ private fun Comms(state: HuntState) {
             items(feed.size) { i ->
                 val e = feed[i]
                 val c = e.chat
-                if (c != null) ChatBubble(c, chatLabel(c.from, state), fmt.format(java.util.Date(c.ts)), onRetry = { c.localId?.let(HuntRepo::retryChat) })
+                if (c != null) ChatBubble(
+                    c, chatLabel(c.from, state), fmt.format(java.util.Date(c.ts)),
+                    onRetry = { c.localId?.let(HuntRepo::retryChat) },
+                    listen = { voice.listen(c.text) },
+                    canListen = !voice.recording && !voice.transcribing && !voice.speaking,
+                )
                 else e.note?.let { m ->
                     HudPanel(accent = Amber) {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -164,21 +185,52 @@ private fun Comms(state: HuntState) {
                             Text(fmt.format(java.util.Date(m.ts)), color = PhosphorDim, style = MaterialTheme.typography.bodySmall)
                         }
                         Text(m.text, color = Phosphor, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
+                        HudButton("Listen", enabled = !voice.recording && !voice.transcribing && !voice.speaking) {
+                            voice.listen(m.text)
+                        }
                     }
                 }
             }
             if (state.handlerThinking) item { Text("${chatLabel("handler", state)} is thinking\u2026", color = PhosphorDim, style = MaterialTheme.typography.bodyLarge) }
         }
         Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp), Alignment.CenterVertically) {
+            HudButton(
+                if (voice.recording) "Finish dictation" else "Dictate",
+                enabled = !voice.transcribing && state.session?.id != null,
+            ) {
+                if (voice.recording) voice.finishRecording(addTranscript)
+                else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+                    voice.startRecording(addTranscript)
+                } else {
+                    micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                }
+            }
+            HudButton(if (voice.autoRead) "Voice on" else "Voice muted") {
+                voice.setAutoReadEnabled(!voice.autoRead)
+            }
+        }
+        if (voice.speaking) {
+            HudButton("Stop audio") { voice.stopPlayback() }
+        }
+        val speechStatus = when {
+            voice.recording -> "Recording up to 30 seconds."
+            voice.transcribing -> "Transcribing…"
+            else -> voice.status
+        }
+        speechStatus?.let { Text(it, color = Amber, style = MaterialTheme.typography.bodySmall) }
+        Row(Modifier.fillMaxWidth(), Arrangement.spacedBy(8.dp), Alignment.CenterVertically) {
             OutlinedTextField(text, { text = it }, Modifier.weight(1f), placeholder = { Text("MESSAGE", color = PhosphorDim) },
                 maxLines = 3, colors = fieldColors())
-            HudSolidButton("Send", enabled = text.isNotBlank() && state.session?.id != null) { HuntRepo.sendChat(text); text = "" }
+            HudSolidButton("Send", enabled = text.isNotBlank() && state.session?.id != null && !voice.recording && !voice.transcribing) { HuntRepo.sendChat(text); text = "" }
         }
     }
 }
 
 @Composable
-private fun ChatBubble(c: ChatLine, label: String, time: String, onRetry: () -> Unit) {
+private fun ChatBubble(
+    c: ChatLine, label: String, time: String, onRetry: () -> Unit,
+    listen: () -> Unit, canListen: Boolean,
+) {
     val mine = c.from == "agent"
     val accent = when { c.failed -> Danger; mine -> Line; c.from == "control" -> Amber; else -> Phosphor }
     Box(Modifier.fillMaxWidth(), contentAlignment = if (mine) Alignment.CenterEnd else Alignment.CenterStart) {
@@ -188,6 +240,7 @@ private fun ChatBubble(c: ChatLine, label: String, time: String, onRetry: () -> 
                 Text(if (c.failed) "FAILED \u2013 TAP TO RETRY" else if (c.pending) "SENDING\u2026" else time, color = if (c.failed) Danger else PhosphorDim, style = MaterialTheme.typography.bodySmall)
             }
             Text(c.text, color = if (c.pending) PhosphorDim else Phosphor, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(top = 4.dp))
+            if (!mine) HudButton("Listen", enabled = canListen, onClick = listen)
         }
     }
 }

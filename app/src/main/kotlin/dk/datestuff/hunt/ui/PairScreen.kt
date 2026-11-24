@@ -29,7 +29,8 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun PairScreen(onDone: (PairInfo) -> Unit) {
-    var scanning by remember { mutableStateOf(true) }
+    var scanning by remember { mutableStateOf(false) }
+    var manual by remember { mutableStateOf(false) }
     var url by remember { mutableStateOf("") }
     var token by remember { mutableStateOf("") }
     var status by remember { mutableStateOf("") }
@@ -57,9 +58,9 @@ fun PairScreen(onDone: (PairInfo) -> Unit) {
                     }
                 }
             }
-            Text("Scan the pairing QR shown in Mission Control.", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium)
-            HudButton("Enter manually") { scanning = false }
-        } else {
+            Text("Scan the pairing code on the game terminal or in Mission Control.", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium)
+            HudButton("Back") { scanning = false }
+        } else if (manual) {
             OutlinedTextField(url, { url = it }, label = { Text("SERVER URL (http://host:8667)") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth(), colors = fieldColors())
             OutlinedTextField(token, { token = it }, label = { Text("TOKEN") }, singleLine = true,
@@ -67,7 +68,11 @@ fun PairScreen(onDone: (PairInfo) -> Unit) {
             HudSolidButton("Connect", Modifier.fillMaxWidth(), enabled = !busy && url.isNotBlank() && token.isNotBlank()) {
                 attempt(PairInfo(url.trim().let { if (it.startsWith("http")) it else "http://$it" }, token.trim()))
             }
-            HudButton("Scan QR") { scanning = true }
+            HudButton("Back") { manual = false }
+        } else {
+            Text("When the game asks you to pair, scan the code on the terminal.", color = PhosphorDim, style = MaterialTheme.typography.bodyMedium)
+            HudSolidButton("Scan pairing code", Modifier.fillMaxWidth(), enabled = !busy) { scanning = true }
+            HudButton("Enter manually", enabled = !busy) { manual = true }
         }
         if (status.isNotEmpty()) Text(status, color = Amber, style = MaterialTheme.typography.bodyLarge)
     }

@@ -1,6 +1,7 @@
 package dk.datestuff.hunt.ui
 
 import android.Manifest
+import android.content.Context
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -83,16 +84,28 @@ fun App() {
     }
     val briefed by Store.briefed(ctx).collectAsStateWithLifecycle(initialValue = null)
 
-    // Permissions
-    val perms = remember {
+    // Android shows runtime permission prompts on first launch, before pairing.
+    val permissions = remember {
         buildList {
-            add(Manifest.permission.ACCESS_FINE_LOCATION); add(Manifest.permission.ACCESS_COARSE_LOCATION); add(Manifest.permission.CAMERA)
+            add(Manifest.permission.CAMERA)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            add(Manifest.permission.RECORD_AUDIO)
             if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }.toTypedArray()
     }
+    val setup = remember(ctx) { ctx.getSharedPreferences("field_agent_setup", Context.MODE_PRIVATE) }
     var permTick by remember { mutableStateOf(0) }
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permTick++ }
-    LaunchedEffect(state.pair != null) { if (state.pair != null) launcher.launch(perms) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        setup.edit().putBoolean("permissions_requested", true).apply()
+        permTick++
+    }
+    LaunchedEffect(Unit) {
+        if (!setup.getBoolean("permissions_requested", false)) {
+            if (permissions.any { !ctx.has(it) }) launcher.launch(permissions)
+            else setup.edit().putBoolean("permissions_requested", true).apply()
+        }
+    }
 
     // Location service while the hunt runs
     LaunchedEffect(state.running, state.pair != null, permTick) {
